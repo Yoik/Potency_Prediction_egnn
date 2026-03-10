@@ -1,0 +1,112 @@
+# ==================== D2 Potency Project 统一配置文件 ====================
+
+# ==================== 文件路径配置 ====================
+paths:
+  # --------------------------------------------------
+  # 1. 外部原始数据 (Raw MD Trajectories) - 绝对不入 Git
+  # --------------------------------------------------
+  md_data_dir: "../MD_data"
+
+  # --------------------------------------------------
+  # 2. 项目内基础输入数据 (Project Inputs)
+  # --------------------------------------------------
+  label_file: "data/labels.csv"
+  reference_pdb: "data/step5_input.pdb"
+  
+  # --------------------------------------------------
+  # 3. 提取出的图特征数据 (Processed Features)
+  # --------------------------------------------------
+  result_dir: "data/features"
+  ref_feature_path: "data/features/20251115_D2_Dopa_cryoEM_rebuild" 
+  
+  # --------------------------------------------------
+  # 4. 模型权重与训练状态 (Checkpoints)
+  # --------------------------------------------------
+  model_path: "checkpoints/saved_models"
+  scaler_path: "checkpoints/saved_models/scaler.pkl"
+
+  # --------------------------------------------------
+  # 5. 分析产物与质控输出 (Outputs & Results)
+  # --------------------------------------------------
+  qc_output_dir: "outputs/qc_structures"
+
+# ==================== 数据处理配置 ====================
+data:
+  # 特征提取相关
+  integration_radius: 1.5          # 积分半径 (Å)
+  pocket_atom_num: 12              # 口袋原子数
+  input_dim_features: 67          # 特征提取时的输入维度
+  input_dim_eval: 19               # 评估时的输入维度 (如果不同)
+  n_atoms: 9 
+  atom_feat_dim: 6 
+  global_feat_dim: 13
+
+# ==================== 蛋白质残基配置 (通用版) ====================
+residues:
+  # Phe toggle switch (6.48, 6.50, 6.51, 6.52)
+  phe_residues: ["6.51", "6.52"] 
+  
+  # OBP (binding pocket) 
+  # 使用 BW 编号或者特定残基名
+  obp_residues: ["3.32", "3.33", "3.36","3.37",
+                 "5.39", "5.42", "5.43", "5.46", 
+                 "6.48", "6.51", "6.52", "6.55", 
+                 "7.39", "7.43"]
+  
+  # 平面残基
+  plane_residues: ["3.32", "5.42", "5.46", "6.52"]
+  # 极性残基
+  polar_anchors: ["5.42", "5.46", "6.55"]
+
+# ==================== 模型训练配置 ====================
+training:
+  learning_rate: 0.001
+  dropout_rate: 0.2
+  weight_decay: 1e-4
+  num_epochs: 30
+  batch_size: 32
+
+  rel_thresholds: [0.8, 1.1]  # 默认相对阈值列表
+  
+  output_dim: 1 # 默认输出维度
+
+
+  # L1 正则化 (稀疏惩罚)
+  # 值越大，模型删特征越狠；值越小，模型保留特征越多
+  # 建议 0.001 - 0.005
+  l1_lambda: 0.02
+  
+  # 数据处理
+  window_size: 100
+  stride: 20
+
+# ==================== 模型评估配置 ====================
+evaluation:
+  # 采样配置：每种等级抽取多少帧进行重构 (太大会跑很慢)
+  samples_per_level: 500
+
+# ==================== 绘图配置 ====================
+plotting:
+  # 使用 Agg 后端防止在服务器上画图崩溃
+  use_agg_backend: true
+  
+  # 默认图表风格
+  style: "default"
+  dpi: 100
+
+# ==================== 其他配置 ====================
+misc:
+  # 随机种子 (可选)
+  random_seed: 42
+  
+  # 多进程配置
+  num_workers: 2
+
+# ==================== EGNN 模型配置 ====================
+model:
+  node_in_dim: 25       # [新增] 节点输入维度 (21原 + 4新)
+  global_dim: 3         # [新增] 全局特征维度
+  hidden_dim: 64
+  n_layers: 4
+  dropout_rate: 0.1
+  graph_radius: 5.0
