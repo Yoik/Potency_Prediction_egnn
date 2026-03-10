@@ -4,6 +4,7 @@
 checkpoints/
 outputs/
 data/
+test_cases/
 
 # =========================
 # 缓存与临时文件
