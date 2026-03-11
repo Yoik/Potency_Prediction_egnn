@@ -13,21 +13,23 @@ from tqdm import tqdm
 import tempfile
 from rdkit.Chem import ChemicalFeatures
 import yaml
+from datetime import datetime
 
 # =========================================================
 # 寻路补丁：定位项目根目录并加载核心库
 # =========================================================
 current_dir = os.path.dirname(os.path.abspath(__file__))
-# 向上退两级，从 scripts/01_train 退到 egnn 根目录
 egnn_dir = os.path.dirname(os.path.dirname(current_dir))
 sys.path.append(egnn_dir)
-# 将新建立的 core_lib 临时加入环境变量，确保原有的 src 和 modules 导入不报错
 sys.path.append(os.path.join(egnn_dir, "core_lib"))
 
+# =========================================================
 # 引入项目模块
+# =========================================================
 try:
     from src.config import init_config
     from src.featurizer import PhysicsFeaturizer
+    from src.utils.logger import Logger
     from modules.qm_loader import load_cube_and_map, find_ligand, get_rdkit_mapping, get_dopa_global_max
     from modules.cube_parser import CubeParser
     from modules.ring_matcher import RingMatcher
@@ -47,10 +49,13 @@ MD_DATA_DIR = os.path.abspath(os.path.join(egnn_dir, relative_md_dir))
 
 INTEGRATION_RADIUS = config.get_float("data.integration_radius")
 # 确保输出路径也是绝对路径，防止执行位置变动导致落盘错误
-OUTPUT_BASE_DIR = config.get_path("paths.result_dir")
+OUTPUT_BASE_DIR = config.get_path("paths.fea_result_dir")
 if not os.path.isabs(OUTPUT_BASE_DIR):
     OUTPUT_BASE_DIR = os.path.abspath(os.path.join(egnn_dir, OUTPUT_BASE_DIR))
 
+# =========================================================
+# 主要处理函数：针对每个化合物的所有副本进行特征提取
+# =========================================================
 def process_compound_replicates(cid, c_dir, featurizer, global_max, args):
     """
     处理单个化合物的所有副本
@@ -133,6 +138,27 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
+
+    # === 初始化 Logger，建立带有时间戳和阶段标识的日志文件 ===
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_dir = os.path.abspath(os.path.join(egnn_dir, "outputs", "logs"))
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    
+    log_filename = f"stage1_extract_features_{current_time}.log"
+    sys.stdout = Logger(os.path.join(log_dir, log_filename))
+
+    # 打印运行表头与参数核对信息
+    print("="*60)
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Task: Feature Extraction")
+    print("="*60)
+    print("[Loaded Configuration & Parameters]")
+    print(f"  - MD Data Source     : {MD_DATA_DIR}")
+    print(f"  - Feature Output Dir : {OUTPUT_BASE_DIR}")
+    print(f"  - Integration Radius : {INTEGRATION_RADIUS} Å (from config: data.integration_radius)")
+    print(f"  - Overwrite Existing : {args.overwrite}")
+    print("="*60 + "\n")
+    # ===============================================================
 
     # 初始化 Featurizer
     print("Initializing Physics Featurizer...")

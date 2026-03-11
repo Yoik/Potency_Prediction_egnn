@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from datetime import datetime
 from sklearn.metrics import mean_squared_error
 from scipy.stats import pearsonr
 from torch_geometric.data import Batch
@@ -28,6 +29,8 @@ try:
     from src.config import init_config
     from src.dataset import MolGraphDataset, PairwiseGraphDataset, get_pairwise_loader
     from src.model import DeltaEGNN
+    from src.utils.seed import seed_everything
+    from src.utils.logger import Logger
 except ImportError as e:
     print(f"Error: 模块导入失败: {e}")
     sys.exit(1)
@@ -36,7 +39,7 @@ except ImportError as e:
 config = init_config()
 
 # 1. 输入数据路径 (../data/features 和 ../data/labels.csv)
-FEATURE_DIR = os.path.abspath(os.path.join(egnn_dir, config.get_path("paths.result_dir") or "data/features"))
+FEATURE_DIR = os.path.abspath(os.path.join(egnn_dir, config.get_path("paths.fea_result_dir") or "data/features"))
 LABEL_FILE = os.path.abspath(os.path.join(egnn_dir, config.get_path("paths.label_file") or "data/labels.csv"))
 
 # 2. 模型保存路径 (checkpoints/...)
@@ -50,22 +53,25 @@ if not os.path.exists(OUTPUT_CSV_DIR):
     os.makedirs(OUTPUT_CSV_DIR)
 
 # 训练超参
-LR = config.get_float("training.learning_rate", 5e-4)
 EPOCHS = config.get_int("training.num_epochs", 60)
 BATCH_SIZE = config.get_int("training.batch_size", 64)
+BASE_SEED = config.get_int("misc.random_seed", 42)
+
+# 优化器超参
+LR = config.get_float("training.learning_rate", 5e-4)
+WEIGHT_DECAY = config.get_float("training.weight_decay", 1e-4)
+
+# 学习率调度器超参
+SCHEDULER_FACTOR = config.get_float("training.factor", 0.5)
+SCHEDULER_PATIENCE = config.get_int("training.patience", 10)
+
 ENSEMBLE_RUNS = 5  # 固定 5 折系综
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ==================== 辅助函数 ====================
 
-def set_seed(seed):
-    """确保可复现性"""
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-
-# === [修改] 增加绝对值正则化约束 ===
+# === 增加绝对值正则化约束 ===
 def train_one_epoch(model, loader, optimizer):
     model.train()
     total_loss = 0
@@ -169,6 +175,34 @@ def evaluate_loo_distribution(models, test_cmpd, train_cmpds, base_dataset):
 # ================= 主流程 =================
 
 def main():
+    # === 建立带有时间戳和阶段标识的日志文件 ===
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_dir = os.path.abspath(os.path.join(egnn_dir, "outputs", "logs"))
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+        
+    log_filename = f"stage2_train_model_{current_time}.log"
+    sys.stdout = Logger(os.path.join(log_dir, log_filename))
+
+    # 打印运行表头与参数核对信息
+    print("="*60)
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Task: Model Training (LOO-CV & Production)")
+    print("="*60)
+    print("[Loaded Configuration & Hyperparameters]")
+    print(f"  - Feature Dir     : {FEATURE_DIR}")
+    print(f"  - Label File      : {LABEL_FILE}")
+    print(f"  - Model Save Dir  : {MODEL_SAVE_BASE}")
+    print(f"  - Base Seed       : {BASE_SEED}")
+    print(f"  - Learning Rate   : {LR}")
+    print(f"  - Weight Decay    : {WEIGHT_DECAY}")
+    print(f"  - Scheduler Factor: {SCHEDULER_FACTOR}")
+    print(f"  - Scheduler Patience: {SCHEDULER_PATIENCE}")
+    print(f"  - Epochs          : {EPOCHS}")
+    print(f"  - Batch Size      : {BATCH_SIZE}")
+    print(f"  - Ensemble Runs   : {ENSEMBLE_RUNS}")
+    print("="*60 + "\n")
+    # ===============================================================
+
     print(f"Loading Dataset from {FEATURE_DIR}...")
     if not os.path.exists(LABEL_FILE):
         print(f"Error: Label file not found at {LABEL_FILE}")
@@ -197,25 +231,21 @@ def main():
         
         # 训练 5 个系综模型
         for run in tqdm(range(ENSEMBLE_RUNS), desc=" Ensemble", leave=False):
-            set_seed(42 + run)
+            seed_everything(BASE_SEED + run)
             model = DeltaEGNN(config).to(DEVICE)
             
-            # 架构检查 (只在第一个跑的时候打印)
-            if i == 0 and run == 0:
-                print(f"  [Arch Check] Layers: {model.n_layers}")
-                if hasattr(model, 'att_pool'):
-                    print("  [Arch Check] WARN: Attention Pooling detected.")
-                else:
-                    print("  [Arch Check] Pooling: Mean Pooling (Correct).")
-
-            optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
+            optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=SCHEDULER_FACTOR, patience=SCHEDULER_PATIENCE)
             
             # 训练循环
             for epoch in tqdm(range(EPOCHS), desc=" Epochs", leave=False):
                 loss = train_one_epoch(model, train_loader, optimizer)
                 scheduler.step(loss)
-            
+
+                if (epoch + 1) % 5 == 0 or epoch == 0:
+                    current_lr = optimizer.param_groups[0]['lr']
+                    print(f"    [Run {run+1} - Epoch {epoch+1:02d}/{EPOCHS}] Loss: {loss:.4f} | LR: {current_lr:.6f}")
+
             # 保存到内存列表
             current_round_models.append(model)
         
@@ -234,13 +264,19 @@ def main():
     
     for run in range(ENSEMBLE_RUNS):
         print(f"Training Production Model {run+1}/{ENSEMBLE_RUNS}...")
-        set_seed(42 + run)
+        seed_everything(BASE_SEED + run)
         model = DeltaEGNN(config).to(DEVICE)
-        optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
+        optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=SCHEDULER_FACTOR, patience=SCHEDULER_PATIENCE)
         
-        for epoch in range(EPOCHS):
-            train_one_epoch(model, full_loader, optimizer)
+        for epoch in tqdm(range(EPOCHS), desc=" Epochs", leave=False):
+            loss = train_one_epoch(model, full_loader, optimizer)
+            scheduler.step(loss)
             
+            if (epoch + 1) % 5 == 0 or epoch == 0:
+                current_lr = optimizer.param_groups[0]['lr']
+                print(f"    [Run {run+1} - Epoch {epoch+1:02d}/{EPOCHS}] Loss: {loss:.4f} | LR: {current_lr:.6f}")
+
         # 保存权重
         save_name = f"model_ensemble_{run}.pth"
         save_path = os.path.join(MODEL_SAVE_BASE, save_name)

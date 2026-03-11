@@ -1,112 +1,69 @@
 # ==================== D2 Potency Project 统一配置文件 ====================
 
-# ==================== 文件路径配置 ====================
+# --------------------------------------------------
+# 1. 全局与共享配置 (Shared Globals)
+# --------------------------------------------------
+misc:
+  random_seed: 42                # 全局随机种子 (保证可复现性与消融实验基准)
+
+# ==================================================
+# 所有路径统一存放在一个 paths 顶层键下，用注释分块
+# ==================================================
 paths:
-  # --------------------------------------------------
-  # 1. 外部原始数据 (Raw MD Trajectories) - 绝对不入 Git
-  # --------------------------------------------------
-  md_data_dir: "../MD_data"
+  # --- 全局/共享路径 ---
+  md_data_dir: "../MD_data"      # 外部原始数据 (绝对不入 Git)
+  gpcr_db: "data/gpcr_db.yaml"   # 序列比对数据库 (Boltz 推理受体识别)
 
-  # --------------------------------------------------
-  # 2. 项目内基础输入数据 (Project Inputs)
-  # --------------------------------------------------
-  label_file: "data/labels.csv"
-  reference_pdb: "data/step5_input.pdb"
-  
-  # --------------------------------------------------
-  # 3. 提取出的图特征数据 (Processed Features)
-  # --------------------------------------------------
-  result_dir: "data/features"
-  ref_feature_path: "data/features/20251115_D2_Dopa_cryoEM_rebuild" 
-  
-  # --------------------------------------------------
-  # 4. 模型权重与训练状态 (Checkpoints)
-  # --------------------------------------------------
-  model_path: "checkpoints/saved_models"
-  scaler_path: "checkpoints/saved_models/scaler.pkl"
+  # --- 特征提取阶段路径 ---
+  reference_pdb: "data/step5_input.pdb" # 刚性对齐的参考构象
+  fea_result_dir: "data/features"           # 提取出的图特征 (.pt) 保存目录
 
-  # --------------------------------------------------
-  # 5. 分析产物与质控输出 (Outputs & Results)
-  # --------------------------------------------------
-  qc_output_dir: "outputs/qc_structures"
+  # --- 模型训练阶段路径 ---
+  label_file: "data/labels.csv"             # 真实效能标签
+  model_path: "checkpoints/saved_models"    # 模型权重保存目录
 
-# ==================== 数据处理配置 ====================
+# --------------------------------------------------
+# 2. 特征提取阶段 (Feature Extraction)
+# --------------------------------------------------
 data:
-  # 特征提取相关
-  integration_radius: 1.5          # 积分半径 (Å)
-  pocket_atom_num: 12              # 口袋原子数
-  input_dim_features: 67          # 特征提取时的输入维度
-  input_dim_eval: 19               # 评估时的输入维度 (如果不同)
-  n_atoms: 9 
-  atom_feat_dim: 6 
-  global_feat_dim: 13
+  integration_radius: 1.5        # QM 密度积分半径 (Å)
 
-# ==================== 蛋白质残基配置 (通用版) ====================
 residues:
-  # Phe toggle switch (6.48, 6.50, 6.51, 6.52)
-  phe_residues: ["6.51", "6.52"] 
-  
-  # OBP (binding pocket) 
-  # 使用 BW 编号或者特定残基名
-  obp_residues: ["3.32", "3.33", "3.36","3.37",
+  # OBP (Binding Pocket) - 参与图节点构建的全原子残基
+  obp_residues: ["3.32", "3.33", "3.36", "3.37",
                  "5.39", "5.42", "5.43", "5.46", 
                  "6.48", "6.51", "6.52", "6.55", 
                  "7.39", "7.43"]
   
-  # 平面残基
-  plane_residues: ["3.32", "5.42", "5.46", "6.52"]
-  # 极性残基
+  # 疏水核心平面残基 - 负责计算受体端平面法向量
+  phe_residues: ["6.51", "6.52"] 
+  
+  # 极性锚点 - 负责基于化学属性的 Spatial Attention 衰减
   polar_anchors: ["5.42", "5.46", "6.55"]
 
-# ==================== 模型训练配置 ====================
-training:
-  learning_rate: 0.001
-  dropout_rate: 0.2
-  weight_decay: 1e-4
+
+# --------------------------------------------------
+# 3. 模型架构配置 (EGNN Architecture)
+# --------------------------------------------------
+model:
+  node_in_dim: 25                # 节点输入特征维度 (物理化学属性+QM权重+Clash等)
+  global_dim: 3                  # 全局特征维度 (几何角度与偏心率)
+  hidden_dim: 64                 # 隐藏层维度
+  n_layers: 4                    # EGNN 消息传递层数
+  dropout_rate: 0.1              # MLP 头的 Dropout 比例
+  graph_radius: 5.0              # 动态建图的截断半径 (Å)
+
+
+# --------------------------------------------------
+# 4. 训练阶段配置 (Training Phase)
+# --------------------------------------------------
+training: 
+  # 训练循环参数
   num_epochs: 30
   batch_size: 32
-
-  rel_thresholds: [0.8, 1.1]  # 默认相对阈值列表
-  
-  output_dim: 1 # 默认输出维度
-
-
-  # L1 正则化 (稀疏惩罚)
-  # 值越大，模型删特征越狠；值越小，模型保留特征越多
-  # 建议 0.001 - 0.005
-  l1_lambda: 0.02
-  
-  # 数据处理
-  window_size: 100
-  stride: 20
-
-# ==================== 模型评估配置 ====================
-evaluation:
-  # 采样配置：每种等级抽取多少帧进行重构 (太大会跑很慢)
-  samples_per_level: 500
-
-# ==================== 绘图配置 ====================
-plotting:
-  # 使用 Agg 后端防止在服务器上画图崩溃
-  use_agg_backend: true
-  
-  # 默认图表风格
-  style: "default"
-  dpi: 100
-
-# ==================== 其他配置 ====================
-misc:
-  # 随机种子 (可选)
-  random_seed: 42
-  
-  # 多进程配置
-  num_workers: 2
-
-# ==================== EGNN 模型配置 ====================
-model:
-  node_in_dim: 25       # [新增] 节点输入维度 (21原 + 4新)
-  global_dim: 3         # [新增] 全局特征维度
-  hidden_dim: 64
-  n_layers: 4
-  dropout_rate: 0.1
-  graph_radius: 5.0
+  # optimizer 参数
+  learning_rate: 0.001
+  weight_decay: 1e-3
+  # scheduler 参数
+  factor: 0.5
+  patience: 5

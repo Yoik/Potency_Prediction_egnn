@@ -87,16 +87,23 @@ class PhysicsFeaturizer:
             return norm_props + phys_feat + clash_feat + res_feat + extra_feats
     
     def process_frame(self, u, lig_res, qm_data, qm_ring_indices, global_max=1.0):
-        # 1. 动态获取残基 ID
-        real_obp_ids = self.aligner.get_real_residue_ids(u, self.obp_bw)
-        real_phe_ids = self.aligner.get_real_residue_ids(u, self.phe_bw)     # 对应 6.51, 6.52
-        real_polar_ids = self.aligner.get_real_residue_ids(u, self.polar_bw) # 对应 5.42, 5.46, 6.55
+        # === 建立轨迹级缓存，避免每帧重复计算 RDKit 匹配和序列比对 ===
+        cache_key = id(u)
+        if not hasattr(self, '_trajectory_cache'):
+            self._trajectory_cache = {}
+            
+        if cache_key not in self._trajectory_cache:
+            mapping, _ = get_rdkit_mapping(qm_data['pdb_path'], lig_res.atoms)
+            real_obp_ids = self.aligner.get_real_residue_ids(u, self.obp_bw)
+            real_phe_ids = self.aligner.get_real_residue_ids(u, self.phe_bw)
+            real_polar_ids = self.aligner.get_real_residue_ids(u, self.polar_bw)
+            self._trajectory_cache[cache_key] = (mapping, real_obp_ids, real_phe_ids, real_polar_ids)
+        else:
+            mapping, real_obp_ids, real_phe_ids, real_polar_ids = self._trajectory_cache[cache_key]
 
-        # === [内部处理 1] 计算 Mapping 与 Weights ===
-        mapping, _ = get_rdkit_mapping(qm_data['pdb_path'], lig_res.atoms)
         if mapping is None: 
             return None
-            
+                    
         integrals = qm_data['integrals']
         norm_integrals = integrals / global_max
         raw_weights = np.zeros(len(lig_res.atoms))
